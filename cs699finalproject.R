@@ -10,6 +10,7 @@ library(MASS)
 library(RWeka)
 library(OneR)
 library(FSelector)
+library(corpcor)
 
 library(pROC)
 #SeekCancerInfo  AgeGrpA  EducA  BMI  HHInc  smokeStat PHQ4 AvgDrinksPerWeek
@@ -37,7 +38,8 @@ df[] <- lapply(df, function(x) {
   }
   return(x)
 })
-
+df <- subset(df, select = -c(Treatment_H5C4,Pandemic))
+df
 # Split the dataset into training and test sets
 
 set.seed(31)
@@ -46,151 +48,140 @@ train <- training(split)
 test <- testing(split)
 
 set.seed(31)
-# repeat 10-fold cross-validation 5 times
-train_control <- trainControl(method = "repeatedcv", number = 10, repeats = 5, 
+# repeat 10-fold cross-validation 
+train_control <- trainControl(method = "repeatedcv", number = 10, 
                               summaryFunction = defaultSummary)
 
 
 
 ######attribute selection methods and reducedata set
 
-get_top_attributes <- function(train, evaluator) {
-  options(java.parameters = "-Xmx8g") # Adjust Java heap size if necessary
-  attr_selector <- evaluator(SeekCancerInfo ~ ., train)
-  top_attributes <- names(attr_selector)[order(attr_selector, decreasing = TRUE)][1:5]
-  return(top_attributes)
-}
+library(CORElearn)
+
 
 # 1. Information Gain
-top_attributes_ig <- get_top_attributes(train, InfoGainAttributeEval)
+top_attributes_ig <- attrEval(SeekCancerInfo ~ ., train, estimator = "InfGain")
+top_attributes_ig <- names(top_attributes_ig)[order(top_attributes_ig, decreasing = TRUE)][1:5]
+
 reduced_train_ig <- train[, c(top_attributes_ig, "SeekCancerInfo")]
 reduced_test_ig <- test[, c(top_attributes_ig, "SeekCancerInfo")]
 
 # 2. Gain Ratio
-top_attributes_gr <- get_top_attributes(train, GainRatioAttributeEval)
+top_attributes_gr <- attrEval(SeekCancerInfo ~ ., train, estimator = "GainRatio")
+top_attributes_gr <- names(top_attributes_gr)[order(top_attributes_gr, decreasing = TRUE)][1:5]
+
 reduced_train_gr <- train[, c(top_attributes_gr, "SeekCancerInfo")]
 reduced_test_gr <- test[, c(top_attributes_gr, "SeekCancerInfo")]
 
 # 3. Gini Index
-# Create a decision tree using the Gini Index as the splitting criterion
-tree <- rpart(SeekCancerInfo ~ ., data = train, method = "class", parms = list(split = "gini"))
-
-# Extract the most important attributes
-importance <- as.data.frame(varImp(tree))
-important_attributes <- rownames(importance[importance$Overall > 0, ])
-reduced_trainGini <- train[, c(important_attributes, "SeekCancerInfo")]
-reduced_testGini <- test[, c(important_attributes, "SeekCancerInfo")]
+top_attributes_gini <-  attrEval(SeekCancerInfo ~ ., train, estimator = "Gini")
+top_attributes_gini <- names(top_attributes_gini)[order(top_attributes_gini, decreasing = TRUE)][1:5]
+reduced_train_gini <- train[, c(top_attributes_gini, "SeekCancerInfo")]
+reduced_test_gini <- test[, c(top_attributes_gini, "SeekCancerInfo")]
 
 
-# 4. Correlation-based Feature Selection (CFS)
-cfs_selector <- CFS(SeekCancerInfo ~ ., train)
-top_attributes_cfs <- colnames(train)[cfs_selector$subset]
-reduced_train_cfs <- train[, c(top_attributes_cfs, "SeekCancerInfo")]
-reduced_test_cfs <- test[, c(top_attributes_cfs, "SeekCancerInfo")]
+####4 ReliefFequalK
 
-# 5. Recursive Feature Elimination (RFE)
-rfe_selector <- rfe(train[, -ncol(train)], train$SeekCancerInfo, sizes = c(5), rfeControl = train_control)
-top_attributes_rfe <- colnames(train)[rfe_selector$optVariables]
-reduced_train_rfe <- train[, c(top_attributes_rfe, "SeekCancerInfo")]
-reduced_test_rfe <- test[, c(top_attributes_rfe, "SeekCancerInfo")]
+top_attributes_Reliefk <-  attrEval(SeekCancerInfo ~ ., train, estimator = "ReliefFequalK")
+top_attributes_Reliefk<- names(top_attributes_Reliefk)[order(top_attributes_Reliefk, decreasing = TRUE)][1:5]
+reduced_train_Reliefk <- train[, c(top_attributes_Reliefk, "SeekCancerInfo")]
+reduced_test_Reliefk <- test[, c(top_attributes_Reliefk, "SeekCancerInfo")]
 
-##################Information Gain
-####################J48
-
-modelLookup("J48")
-
-## use tuneGrid
-
-J48Grid <-  expand.grid(C = c(0.01, 0.25, 0.5), M = (1:4))
-model <- train(SeekCancerInfo ~ ., data = reduced_train_gr, method = "J48", trControl = train_control,
-               tuneGrid = J48Grid
-)
-model
-test_pred <- predict(model, newdata = test)
+###5 ImpurityEuclid
 
 
 
+top_attributes_Euclid <-  attrEval(SeekCancerInfo ~ ., train, estimator = "ImpurityEuclid")
+top_attributes_Euclid<- names(top_attributes_Euclid)[order(top_attributes_Euclid, decreasing = TRUE)][1:5]
+reduced_train_Euclid <- train[, c(top_attributes_Euclid, "SeekCancerInfo")]
+reduced_test_Euclid <- test[, c(top_attributes_Euclid, "SeekCancerInfo")]
 
 
-compute_performance_measures <- function(true_labels, predictions) {
-  confusion <- confusionMatrix(true_labels, predictions)
-  print(confusion)
-  TP_rate <- confusion$byClass['Sensitivity']
-  FP_rate <- confusion$byClass['Specificity']
-  precision <- confusion$byClass['Pos Pred Value']
-  recall <- confusion$byClass['Sensitivity']
-  F_measure <- confusion$byClass['F1']
-  MCC <- confusion$byClass['MCC']
+
+ 
+##################Information Gain  reduced_train_ig  reduced_test_ig
+
+
+
+get_performance_measures <- function(train, test, method) {
   
-  roc_obj <- roc(true_labels, as.numeric(predictions), levels = rev(levels(true_labels)), direction = "<")
-  roc_area <- auc(roc_obj)
+  # Train the model
+  model <- train(SeekCancerInfo ~ ., data = train, method = method, trControl = train_control)
   
-  weights <- table(true_labels) / length(true_labels)
-  weighted_avg <- function(x) sum(x * weights)
+  # Make predictions on the test set
+  test_pred <- predict(model, newdata = test)
   
-  weighted_TP_rate <- weighted_avg(TP_rate)
-  weighted_FP_rate <- weighted_avg(FP_rate)
-  weighted_precision <- weighted_avg(precision)
-  weighted_recall <- weighted_avg(recall)
-  weighted_F_measure <- weighted_avg(F_measure)
-  weighted_MCC <- weighted_avg(MCC)
+  # Create confusion matrix
+  conf_matrix <- confusionMatrix(table(test_pred, test$SeekCancerInfo))
   
-  performance_measures <- data.frame(
-    Measure = c("TP rate", "FP rate", "Precision", "Recall", "F-measure", "ROC area", "MCC",
-                "Weighted TP rate", "Weighted FP rate", "Weighted Precision", "Weighted Recall",
-                "Weighted F-measure", "Weighted MCC"),
-    Value = c(TP_rate, FP_rate, precision, recall, F_measure, roc_area, MCC,
-              weighted_TP_rate, weighted_FP_rate, weighted_precision, weighted_recall,
-              weighted_F_measure, weighted_MCC)
-  )
+  # Calculate TP rate, FP rate, precision, recall, F-measure, ROC area, and MCC for each class
+  TP_rate <- conf_matrix$byClass[,"Sensitivity"]
+  FP_rate <- conf_matrix$byClass[,"Specificity"]
+  precision <- conf_matrix$byClass[,"Pos Pred Value"]
+  recall <- conf_matrix$byClass[,"Recall"]
+  F_measure <- conf_matrix$byClass[,"F1"]
+  ROC_area <- roc(test$SeekCancerInfo, as.numeric(test_pred))$auc
+  MCC <- conf_matrix$overall["MCC"]
   
+  # Calculate weighted averages
+  weighted_TP_rate <- conf_matrix$overall["Sensitivity"]
+  weighted_FP_rate <- conf_matrix$overall["Specificity"]
+  weighted_precision <- conf_matrix$overall["Pos Pred Value"]
+  weighted_recall <- conf_matrix$overall["Prevalence"]
+  weighted_F_measure <- conf_matrix$overall["F1"]
+  weighted_ROC_area <- roc(test$SeekCancerInfo, as.numeric(test_pred), levels=c(0,1))$auc
+  weighted_MCC <- conf_matrix$overall["MCC"]
   
-  return(performance_measures)
+  # Return the performance measures as a list
+  measures <- list(conf_matrix = conf_matrix,
+                   TP_rate = TP_rate,
+                   FP_rate = FP_rate,
+                   precision = precision,
+                   recall = recall,
+                   F_measure = F_measure,
+                   ROC_area = ROC_area,
+                   MCC = MCC,
+                   weighted_TP_rate = weighted_TP_rate,
+                   weighted_FP_rate = weighted_FP_rate,
+                   weighted_precision = weighted_precision,
+                   weighted_recall = weighted_recall,
+                   weighted_F_measure = weighted_F_measure,
+                   weighted_ROC_area = weighted_ROC_area,
+                   weighted_MCC = weighted_MCC)
+  return(measures)
+}
+
+# Set the seed for reproducibility
+set.seed(123)
+
+# Create a list of the 5 classification algorithms to use
+methods <- c("glm", "rf", "rpart", "svmRadial", "knn")
+
+# Create a list to store the performance measures for each model
+performance_measures <- list()
+
+
+for (i in 1:5) {
+  
+  # Choose an attribution selection method and create a reduced training dataset and a reduced test dataset
+  # replace this with your own code to create the reduced datasets
+  reduced_train <- reduced_train_ig  
+  reduced_test <- reduced_test_ig
+  
+  # Loop through the 5 classification algorithms and train and test the models on the reduced datasets
+  for (j in 1:5) {
+    
+    # Get the performance measures for the model
+    measures <- get_performance_measures(reduced_train, reduced_test, methods[j])
+    
+    # Add the performance measures to the list
+    performance_measures[[paste0("Method_", methods[j], "_Reduction_", i)]] <- measures
+  }
 }
 
 
 
 
-true_labels <- test$SeekCancerInfo
-predictions <- test_pred
-performance_measures <- compute_performance_measures(true_labels, predictions)
-
-print(performance_measures)
-
-
-#################Decision Tree
-
-
-
-modelLookup("rpart")
-
-
-
-## use tuneLength
-model <- train(SeekCancerInfo ~ ., data = train, method = "rpart", trControl = train_control,
-               tuneLength = 10)
-model
-test_pred <- predict(model, newdata = test)
-confusionMatrix(test_pred, test$SeekCancerInfo)
-
-
-####################  knn
-
-
-
-modelLookup("knn")
-
-
-
-knnModel <- train(SeekCancerInfo ~., data = train, method = "knn",
-                  trControl=train_control,
-                  preProcess = c("center", "scale"),
-                  tuneLength = 100)
-
-knnModel
-
-test_pred <- predict(knnModel, newdata = test)
-confusionMatrix(test_pred, test$SeekCancerInfo)
 
 
 
@@ -203,56 +194,3 @@ confusionMatrix(test_pred, test$SeekCancerInfo)
 
 
 
-
-
-
-
-##############Random Forest
-
-
-
-library(randomForest)
-library(caret)
-
-# Define the tuning grid
-grid <- expand.grid(mtry = seq(1, ncol(train) - 1, by = 2))
-
-rf_fit <- train(SeekCancerInfo ~ ., data = train, method = "rf", trControl = train_control, tuneGrid = grid)
-
-rf_fit$bestTune
-# Output: mtry
-#        9
-
-plot(rf_fit)
-
-# Test the model on the test dataset and generate the confusion matrix
-predictions <- predict(rf_fit, newdata = test)
-confusionMatrix(predictions, test$SeekCancerInfo)
-
-
-
-
-
-
-
-
-############Support Vector Machine
-
-
-library(e1071)
-library(caret)
-
-# Define the tuning grid
-grid <- expand.grid(sigma = seq(0.1, 1, length.out = 5), C = c(0.1, 1, 10, 100))
-
-# Perform 10-fold cross-validation using the trainControl, tuneGrid, and train functions
-svm_fit <- train(SeekCancerInfo ~ ., data = train, method = "svmRadial", trControl = train_control, tuneGrid = grid)
-
-# Check the best values of sigma and C
-svm_fit$bestTune
-
-plot(svm_fit)
-
-# Test the model on the test dataset and generate the confusion matrix
-predictions <- predict(svm_fit, newdata = test)
-confusionMatrix(predictions, test$SeekCancerInfo)   
