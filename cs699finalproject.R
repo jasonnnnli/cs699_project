@@ -11,7 +11,7 @@ library(RWeka)
 library(OneR)
 library(FSelector)
 library(corpcor)
-
+library(tidyr)
 library(pROC)
 #SeekCancerInfo  AgeGrpA  EducA  BMI  HHInc  smokeStat PHQ4 AvgDrinksPerWeek
 df <-read.csv('C:/Users/Jason/Downloads/hints5_cycle4_public (2).csv')
@@ -38,7 +38,7 @@ df[] <- lapply(df, function(x) {
   }
   return(x)
 })
-df <- subset(df, select = -c(Treatment_H5C4,Pandemic))
+df <- subset(df, select = -c(Treatment_H5C4,Pandemic, Language_Flag,DRA,Stratum))
 df
 # Split the dataset into training and test sets
 
@@ -49,7 +49,7 @@ test <- testing(split)
 
 set.seed(31)
 # repeat 10-fold cross-validation 
-train_control <- trainControl(method = "repeatedcv", number = 10, 
+train_control <- trainControl(method = "cv", number = 10, 
                               summaryFunction = defaultSummary)
 
 
@@ -98,96 +98,98 @@ reduced_test_Euclid <- test[, c(top_attributes_Euclid, "SeekCancerInfo")]
 
 
 
- 
-##################Information Gain  reduced_train_ig  reduced_test_ig
-
-
-
-get_performance_measures <- function(train, test, method) {
+compute_performance_measures <- function(true_labels, predictions) {
   
-  # Train the model
-  model <- train(SeekCancerInfo ~ ., data = train, method = method, trControl = train_control)
+  confusion <- confusionMatrix(true_labels, predictions)
+  TP_rate <- confusion$byClass['Sensitivity']
+  FP_rate <- confusion$byClass['Specificity']
+  precision <- confusion$byClass['Pos Pred Value']
+  recall <- confusion$byClass['Sensitivity']
+  F_measure <- confusion$byClass['F1']
+  MCC <- confusion$byClass['MCC']
   
-  # Make predictions on the test set
-  test_pred <- predict(model, newdata = test)
+  roc_obj <- roc(true_labels, as.numeric(predictions), levels = rev(levels(true_labels)), direction = "<")
+  roc_area <- auc(roc_obj)
   
-  # Create confusion matrix
-  conf_matrix <- confusionMatrix(table(test_pred, test$SeekCancerInfo))
+  weights <- table(true_labels) / length(true_labels)
+  weighted_avg <- function(x) sum(x * weights)
   
-  # Calculate TP rate, FP rate, precision, recall, F-measure, ROC area, and MCC for each class
-  TP_rate <- conf_matrix$byClass[,"Sensitivity"]
-  FP_rate <- conf_matrix$byClass[,"Specificity"]
-  precision <- conf_matrix$byClass[,"Pos Pred Value"]
-  recall <- conf_matrix$byClass[,"Recall"]
-  F_measure <- conf_matrix$byClass[,"F1"]
-  ROC_area <- roc(test$SeekCancerInfo, as.numeric(test_pred))$auc
-  MCC <- conf_matrix$overall["MCC"]
+  weighted_TP_rate <- weighted_avg(TP_rate)
+  weighted_FP_rate <- weighted_avg(FP_rate)
+  weighted_precision <- weighted_avg(precision)
+  weighted_recall <- weighted_avg(recall)
+  weighted_F_measure <- weighted_avg(F_measure)
+  weighted_MCC <- weighted_avg(MCC)
   
-  # Calculate weighted averages
-  weighted_TP_rate <- conf_matrix$overall["Sensitivity"]
-  weighted_FP_rate <- conf_matrix$overall["Specificity"]
-  weighted_precision <- conf_matrix$overall["Pos Pred Value"]
-  weighted_recall <- conf_matrix$overall["Prevalence"]
-  weighted_F_measure <- conf_matrix$overall["F1"]
-  weighted_ROC_area <- roc(test$SeekCancerInfo, as.numeric(test_pred), levels=c(0,1))$auc
-  weighted_MCC <- conf_matrix$overall["MCC"]
+  performance_measures <- data.frame(
+    Measure = c("TP rate", "FP rate", "Precision", "Recall", "F-measure", "ROC area", "MCC",
+                "Weighted TP rate", "Weighted FP rate", "Weighted Precision", "Weighted Recall",
+                "Weighted F-measure", "Weighted MCC"),
+    Value = c(TP_rate, FP_rate, precision, recall, F_measure, roc_area, MCC,
+              weighted_TP_rate, weighted_FP_rate, weighted_precision, weighted_recall,
+              weighted_F_measure, weighted_MCC)
+  )
   
-  # Return the performance measures as a list
-  measures <- list(conf_matrix = conf_matrix,
-                   TP_rate = TP_rate,
-                   FP_rate = FP_rate,
-                   precision = precision,
-                   recall = recall,
-                   F_measure = F_measure,
-                   ROC_area = ROC_area,
-                   MCC = MCC,
-                   weighted_TP_rate = weighted_TP_rate,
-                   weighted_FP_rate = weighted_FP_rate,
-                   weighted_precision = weighted_precision,
-                   weighted_recall = weighted_recall,
-                   weighted_F_measure = weighted_F_measure,
-                   weighted_ROC_area = weighted_ROC_area,
-                   weighted_MCC = weighted_MCC)
-  return(measures)
+  
+  return(performance_measures)
 }
 
-# Set the seed for reproducibility
-set.seed(123)
-
-# Create a list of the 5 classification algorithms to use
-methods <- c("glm", "rf", "rpart", "svmRadial", "knn")
-
-# Create a list to store the performance measures for each model
-performance_measures <- list()
 
 
-for (i in 1:5) {
+rpart_tuneGrid <- expand.grid(cp = seq(0.01, 0.5, length.out = 10))
+svm_tuneGrid <- expand.grid(sigma = 0.1, C = 1)
+
+models <- list(
+  J48 = list(method = "J48"),
+  rpart = list(method = "rpart", tuneGrid = rpart_tuneGrid),
+  nnet = list(method = "nnet"),
+  rf = list(method = "rf"),
+  svmRadial = list(method = "svmRadial", tuneGrid = svm_tuneGrid)
+)
+
+reduced_datasets <- list(
+  IG = list(train = reduced_train_ig, test = reduced_test_ig),
+  GR = list(train = reduced_train_gr, test = reduced_test_gr),
+  Gini = list(train = reduced_train_gini, test = reduced_test_gini),
+  ReliefK = list(train = reduced_train_Reliefk, test = reduced_test_Reliefk),
+  Euclid = list(train = reduced_train_Euclid, test = reduced_test_Euclid)
+)
+
+combined_performance_measures <- data.frame()
+
+# Iterate over the feature selection methods
+for (reduced_data_name in names(reduced_datasets)) {
+  reduced_train <- reduced_datasets[[reduced_data_name]]$train
+  reduced_test <- reduced_datasets[[reduced_data_name]]$test
   
-  # Choose an attribution selection method and create a reduced training dataset and a reduced test dataset
-  # replace this with your own code to create the reduced datasets
-  reduced_train <- reduced_train_ig  
-  reduced_test <- reduced_test_ig
-  
-  # Loop through the 5 classification algorithms and train and test the models on the reduced datasets
-  for (j in 1:5) {
+  # Iterate over the models
+  for (model_name in names(models)) {
+    model_params <- models[[model_name]]
     
-    # Get the performance measures for the model
-    measures <- get_performance_measures(reduced_train, reduced_test, methods[j])
+    model <- train(SeekCancerInfo ~ ., data = reduced_train, method = model_params$method, trControl = train_control, tuneGrid = model_params$tuneGrid)
+    test_pred <- predict(model, newdata = reduced_test)
     
-    # Add the performance measures to the list
-    performance_measures[[paste0("Method_", methods[j], "_Reduction_", i)]] <- measures
+    true_labels <- reduced_test$SeekCancerInfo
+    predictions <- test_pred
+    performance_measures <- compute_performance_measures(true_labels, predictions)
+    
+    # Add the model name and feature selection method as new columns to the performance_measures dataframe
+    performance_measures$Model <- model_name
+    performance_measures$FeatureSelection <- reduced_data_name
+    
+    # Combine the performance measures of each model into a single dataframe
+    combined_performance_measures <- rbind(combined_performance_measures, performance_measures)
   }
 }
 
+# Spread the combined_performance_measures data frame to have separate columns for each model
+spread_performance_measures <- combined_performance_measures %>%
+  unite("Model_FeatureSelection", Model, FeatureSelection) %>%
+  spread(Model_FeatureSelection, Value)
 
-
-
-
-
-
-
-
-
+# Print the spread performance measures
+cat("\n\nSpread performance measures:\n")
+print(spread_performance_measures)
 
 
 
