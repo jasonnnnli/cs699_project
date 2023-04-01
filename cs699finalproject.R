@@ -10,7 +10,6 @@ library(MASS)
 library(RWeka)
 library(OneR)
 library(FSelector)
-library(corpcor)
 
 library(pROC)
 #SeekCancerInfo  AgeGrpA  EducA  BMI  HHInc  smokeStat PHQ4 AvgDrinksPerWeek
@@ -38,8 +37,7 @@ df[] <- lapply(df, function(x) {
   }
   return(x)
 })
-df <- subset(df, select = -c(Treatment_H5C4,Pandemic))
-df
+
 # Split the dataset into training and test sets
 
 set.seed(31)
@@ -48,58 +46,55 @@ train <- training(split)
 test <- testing(split)
 
 set.seed(31)
-# repeat 10-fold cross-validation 
-train_control <- trainControl(method = "repeatedcv", number = 10, 
+# repeat 10-fold cross-validation 5 times
+train_control <- trainControl(method = "repeatedcv", number = 10, repeats = 5, 
                               summaryFunction = defaultSummary)
 
 
 
 ######attribute selection methods and reducedata set
 
-library(CORElearn)
-
+get_top_attributes <- function(train, evaluator) {
+  options(java.parameters = "-Xmx8g") # Adjust Java heap size if necessary
+  attr_selector <- evaluator(SeekCancerInfo ~ ., train)
+  top_attributes <- names(attr_selector)[order(attr_selector, decreasing = TRUE)][1:5]
+  return(top_attributes)
+}
 
 # 1. Information Gain
-top_attributes_ig <- attrEval(SeekCancerInfo ~ ., train, estimator = "InfGain")
-top_attributes_ig <- names(top_attributes_ig)[order(top_attributes_ig, decreasing = TRUE)][1:5]
-
+top_attributes_ig <- get_top_attributes(train, InfoGainAttributeEval)
 reduced_train_ig <- train[, c(top_attributes_ig, "SeekCancerInfo")]
 reduced_test_ig <- test[, c(top_attributes_ig, "SeekCancerInfo")]
 
 # 2. Gain Ratio
-top_attributes_gr <- attrEval(SeekCancerInfo ~ ., train, estimator = "GainRatio")
-top_attributes_gr <- names(top_attributes_gr)[order(top_attributes_gr, decreasing = TRUE)][1:5]
-
+top_attributes_gr <- get_top_attributes(train, GainRatioAttributeEval)
 reduced_train_gr <- train[, c(top_attributes_gr, "SeekCancerInfo")]
 reduced_test_gr <- test[, c(top_attributes_gr, "SeekCancerInfo")]
 
 # 3. Gini Index
-top_attributes_gini <-  attrEval(SeekCancerInfo ~ ., train, estimator = "Gini")
-top_attributes_gini <- names(top_attributes_gini)[order(top_attributes_gini, decreasing = TRUE)][1:5]
-reduced_train_gini <- train[, c(top_attributes_gini, "SeekCancerInfo")]
-reduced_test_gini <- test[, c(top_attributes_gini, "SeekCancerInfo")]
+# Create a decision tree using the Gini Index as the splitting criterion
+tree <- rpart(SeekCancerInfo ~ ., data = train, method = "class", parms = list(split = "gini"))
+
+# Extract the most important attributes
+importance <- as.data.frame(varImp(tree))
+important_attributes <- rownames(importance[importance$Overall > 0, ])
+reduced_trainGini <- train[, c(important_attributes, "SeekCancerInfo")]
+reduced_testGini <- test[, c(important_attributes, "SeekCancerInfo")]
 
 
-####4 ReliefFequalK
+# 4. Correlation-based Feature Selection (CFS)
+cfs_selector <- CFS(SeekCancerInfo ~ ., train)
+top_attributes_cfs <- colnames(train)[cfs_selector$subset]
+reduced_train_cfs <- train[, c(top_attributes_cfs, "SeekCancerInfo")]
+reduced_test_cfs <- test[, c(top_attributes_cfs, "SeekCancerInfo")]
 
-top_attributes_Reliefk <-  attrEval(SeekCancerInfo ~ ., train, estimator = "ReliefFequalK")
-top_attributes_Reliefk<- names(top_attributes_Reliefk)[order(top_attributes_Reliefk, decreasing = TRUE)][1:5]
-reduced_train_Reliefk <- train[, c(top_attributes_Reliefk, "SeekCancerInfo")]
-reduced_test_Reliefk <- test[, c(top_attributes_Reliefk, "SeekCancerInfo")]
+# 5. Recursive Feature Elimination (RFE)
+rfe_selector <- rfe(train[, -ncol(train)], train$SeekCancerInfo, sizes = c(5), rfeControl = train_control)
+top_attributes_rfe <- colnames(train)[rfe_selector$optVariables]
+reduced_train_rfe <- train[, c(top_attributes_rfe, "SeekCancerInfo")]
+reduced_test_rfe <- test[, c(top_attributes_rfe, "SeekCancerInfo")]
 
-###5 ImpurityEuclid
-
-
-
-top_attributes_Euclid <-  attrEval(SeekCancerInfo ~ ., train, estimator = "ImpurityEuclid")
-top_attributes_Euclid<- names(top_attributes_Euclid)[order(top_attributes_Euclid, decreasing = TRUE)][1:5]
-reduced_train_Euclid <- train[, c(top_attributes_Euclid, "SeekCancerInfo")]
-reduced_test_Euclid <- test[, c(top_attributes_Euclid, "SeekCancerInfo")]
-
-
-
- 
-##################Information Gain  reduced_train_ig  reduced_test_ig
+##################Information Gain
 ####################J48
 
 modelLookup("J48")
@@ -107,7 +102,7 @@ modelLookup("J48")
 ## use tuneGrid
 
 J48Grid <-  expand.grid(C = c(0.01, 0.25, 0.5), M = (1:4))
-model <- train(SeekCancerInfo ~ ., data = train, method = "J48", trControl = train_control,
+model <- train(SeekCancerInfo ~ ., data = reduced_train_gr, method = "J48", trControl = train_control,
                tuneGrid = J48Grid
 )
 model
