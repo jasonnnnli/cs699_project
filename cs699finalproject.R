@@ -98,6 +98,9 @@ reduced_test_Euclid <- test[, c(top_attributes_Euclid, "SeekCancerInfo")]
 
 
 
+
+
+
 compute_performance_measures <- function(true_labels, predictions) {
   
   confusion <- confusionMatrix(true_labels, predictions)
@@ -191,8 +194,25 @@ spread_performance_measures <- combined_performance_measures %>%
 cat("\n\nSpread performance measures:\n")
 print(spread_performance_measures)
 
+###best model  J48_Gini
+model <- train(SeekCancerInfo ~ ., data = reduced_train_gini, method = "J48", trControl = train_control)
+model
+test_pred <- predict(model, newdata = reduced_test_gini)
+confusionMatrix(test_pred, reduced_test_gini$SeekCancerInfo)
+
+#####
+model <- train(SeekCancerInfo ~ ., data = train, method = "J48", trControl = train_control)
+model
+test_pred <- predict(model, newdata = test)
+confusionMatrix(test_pred, test$SeekCancerInfo)
 
 
 
+#####dataset 
+write.csv(df, "preprocessed_dataset.csv", row.names = FALSE)
+write.csv(train, "initial_train_dataset.csv", row.names = FALSE)
+write.csv(test, "initial_test_dataset.csv", row.names = FALSE)
+write.csv(reduced_train_gini, "best_model_train_dataset.csv", row.names = FALSE)
+write.csv(reduced_test_gini, "best_model_test_dataset.csv", row.names = FALSE)
 
 
